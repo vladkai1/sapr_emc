@@ -10,7 +10,7 @@ import os
 DB_CONFIG = {
     'host': '92.53.96.132',
     'user': 'ct919001_2345',
-    'password': 'ТВОЙ_ПАРОЛЬ_ОТ_БД', 
+    'password': st.secrets["db_password"], # <--- ВОТ ЭТО ИЗМЕНЕНИЕ
     'database': 'ct919001_2345',
     'port': 3306
 }
