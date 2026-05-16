@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import pymysql
 import sqlite3
 import hashlib
 import matplotlib.pyplot as plt
@@ -12,9 +11,9 @@ from datetime import datetime
 import os
 
 # --- 1. НАСТРОЙКИ СТРАНИЦЫ ---
-st.set_page_config(page_title="САПР ЭМС: СВЧ-оборудование", layout="wide")
+st.set_page_config(page_title="САПР ЭМС: Оценка устойчивости", layout="wide")
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ РЕЗЕРВНОЙ БД (SQLite) ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ ЛОКАЛЬНОЙ БД (SQLite) ---
 def init_local_db():
     conn = sqlite3.connect('fallback_local.db')
     cur = conn.cursor()
@@ -40,32 +39,10 @@ def init_local_db():
 
 init_local_db()
 
-# --- 3. ПРОВЕРКА И ПОДКЛЮЧЕНИЕ К БД ---
-@st.cache_resource(ttl=30)
-def check_db_status():
-    try:
-        conn = pymysql.connect(
-            host='92.53.96.132', user='ct919001_2345',
-            password=st.secrets["db_password"], database='ct919001_2345',
-            port=3306, connect_timeout=3
-        )
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-IS_ONLINE = check_db_status()
-
 def get_active_connection():
-    if IS_ONLINE:
-        return pymysql.connect(
-            host='92.53.96.132', user='ct919001_2345',
-            password=st.secrets["db_password"], database='ct919001_2345', port=3306
-        ), "MySQL 8.0 (Timeweb Cloud)"
-    else:
-        return sqlite3.connect('fallback_local.db'), "SQLite 3.0 (Автономный режим)"
+    return sqlite3.connect('fallback_local.db'), "SQLite 3.0 (Локальный режим)"
 
-# --- 4. УПРАВЛЕНИЕ СЕССИЕЙ И ЗАГРУЗКА ИНС ---
+# --- 3. УПРАВЛЕНИЕ СЕССИЕЙ И ЗАГРУЗКА ИНС ---
 if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
 
@@ -73,7 +50,6 @@ def load_nn_model():
     if os.path.exists('trained_model.joblib') and os.path.exists('scaler.joblib'):
         model = joblib.load('trained_model.joblib')
         scaler = joblib.load('scaler.joblib')
-        # Пытаемся загрузить сохраненную точность MAPE, если её нет - пишем "Н/Д"
         mape = joblib.load('mape.joblib') if os.path.exists('mape.joblib') else "Н/Д"
         return model, scaler, mape
     return None, None, None
@@ -82,12 +58,9 @@ def hash_password(password):
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
 # --- ИНТЕРФЕЙС ---
-if IS_ONLINE:
-    st.sidebar.success("● БД: MySQL (Timeweb)")
-else:
-    st.sidebar.warning("⚡ БД: SQLite (Офлайн)")
+st.sidebar.info("● БД: SQLite (Локальный режим)")
 
-st.title("📡 САПР ЭМС: Оценка устойчивости СВЧ-аппаратуры")
+st.title("📡 САПР ЭМС: Оценка устойчивости electronic средств к импульсному магнитному полю")
 st.markdown("Моделирование наведенных импульсных помех в соответствии с государственными стандартами РФ.")
 
 tab_engineer, tab_admin = st.tabs(["🚀 АРМ Инженера (Анализ)", "⚙️ Панель Разработчика"])
@@ -101,7 +74,6 @@ with tab_engineer:
     if model is None:
         st.warning("⚠️ Ядро ИНС не обучено. Загрузите базу данных в Панели Разработчика.")
     else:
-        # Выводим реальную точность нейросети
         if isinstance(current_mape, float):
             st.info(f"🧠 Нейронная сеть активна. **Реальная погрешность (MAPE): {current_mape:.2f}%**")
         else:
@@ -115,8 +87,7 @@ with tab_engineer:
             
             st.markdown("""
             **Нормативная база расчета:**
-            * **ГОСТ 8.644-2014** (Сила импульсного тока молниевого разряда 1-100 кА)
-            * **ГОСТ IEC 61000-4-3-2017** (Устойчивость к РЧ и СВЧ электромагнитному полю)
+            * **ГОСТ IEC 61000-4-9** (Электромагнитная совместимость. Устойчивость к импульсному магнитному полю)
             """)
             calc_btn = st.button("СМОДЕЛИРОВАТЬ ВОЗДЕЙСТВИЕ", use_container_width=True, type="primary")
 
@@ -128,20 +99,19 @@ with tab_engineer:
                 st.subheader("Протокол виртуального испытания")
                 st.metric("Амплитуда наведенного напряжения (V)", f"{v_peak:.4f} В")
                 
-                # Обновленные экспертные вердикты с привязкой к СВЧ
-                st.markdown("### Оценка электромагнитной совместимости СВЧ-тракта:")
+                st.markdown("### Оценка электромагнитной совместимости:")
                 if v_peak < 0.4:
-                    verdict = "КРИТЕРИЙ А: Норма. Воздействие в пределах запаса помехоустойчивости СВЧ-усилителей."
-                    st.success(f"🟢 **{verdict}**\n\nДеградации коэффициента шума и искажения диаграммы направленности не ожидается.")
+                    verdict = "КРИТЕРИЙ А: Норма. Воздействие в пределах запаса помехоустойчивости."
+                    st.success(f"🟢 **{verdict}**\n\nДеградации полезного сигнала не ожидается. Аппаратура функционирует штатно.")
                 elif v_peak < 1.2:
                     verdict = "КРИТЕРИЙ B: Сбой. Временное искажение битов (Soft Error)."
-                    st.warning(f"🟡 **{verdict}**\n\nСмещение рабочей точки СВЧ-транзисторов. Возможна потеря пакетов в цифровом тракте ПРМ/ПРД модулей.")
+                    st.warning(f"🟡 **{verdict}**\n\nСмещение рабочей точки транзисторов. Возможна потеря пакетов в цифровом тракте, требуется программная коррекция.")
                 elif v_peak < 2.5:
                     verdict = "КРИТЕРИЙ C: Зависание. Эффект тиристорного защелкивания (Latch-up)."
-                    st.error(f"🟠 **{verdict}**\n\nБлокировка сигнального процессора (DSP) радиолокационного тракта. Требуется жесткая перезагрузка оборудования.")
+                    st.error(f"🟠 **{verdict}**\n\nБлокировка сигнального процессора. Требуется жесткая перезагрузка оборудования оператором.")
                 else:
                     verdict = "КРИТЕРИЙ D: ФАТАЛЬНО. Пробой диэлектрика."
-                    st.error(f"🔴 **{verdict}**\n\nНеобратимое тепловое разрушение p-n переходов арсенид-галлиевых (GaAs) СВЧ-компонентов!")
+                    st.error(f"🔴 **{verdict}**\n\nНеобратимое тепловое разрушение p-n переходов полупроводниковых компонентов!")
 
                 # График
                 t = np.linspace(0, 0.0002, 1000)
@@ -159,8 +129,7 @@ with tab_engineer:
                 try:
                     db_conn, _ = get_active_connection()
                     cur = db_conn.cursor()
-                    placeholder = "%s" if IS_ONLINE else "?"
-                    cur.execute(f"INSERT INTO prediction_log (S_in, H_in, V_out, Expert_Verdict, RequestDate) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
+                    cur.execute("INSERT INTO prediction_log (S_in, H_in, V_out, Expert_Verdict, RequestDate) VALUES (?, ?, ?, ?, ?)",
                                 (s_val, h_val, v_peak, verdict.split(':')[0], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                     db_conn.commit()
                     db_conn.close()
@@ -180,18 +149,11 @@ with tab_admin:
             
             if submit:
                 pwd_hash = hash_password(pwd)
-                if not IS_ONLINE:
-                    conn = sqlite3.connect('fallback_local.db')
-                    cur = conn.cursor()
-                    cur.execute("SELECT * FROM users WHERE login=? AND pass_hash=?", (login, pwd_hash))
-                    user = cur.fetchone()
-                    conn.close()
-                else:
-                    conn, _ = get_active_connection()
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT * FROM users WHERE login=%s AND pass_hash=%s", (login, pwd_hash))
-                        user = cur.fetchone()
-                    conn.close()
+                conn = sqlite3.connect('fallback_local.db')
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM users WHERE login=? AND pass_hash=?", (login, pwd_hash))
+                user = cur.fetchone()
+                conn.close()
                 
                 if user:
                     st.session_state.admin_logged_in = True
@@ -207,7 +169,7 @@ with tab_admin:
         st.divider()
         
         st.subheader("📂 Импорт результатов физического эксперимента")
-        st.write("Загрузите CSV-выгрузку с осциллографа или измерительного стенда (Колонки: S, H, V).")
+        st.write("Загрузите CSV-выгрузку измерительного стенда (Колонки: S, H, V).")
         uploaded_file = st.file_uploader("Файл данных", type=["csv", "xlsx"])
         
         if uploaded_file is not None:
@@ -218,15 +180,18 @@ with tab_admin:
                 if st.button("📥 Интегрировать данные в базу СУБД", type="secondary"):
                     conn, _ = get_active_connection()
                     cur = conn.cursor()
-                    placeholder = "%s" if IS_ONLINE else "?"
+                    
+                    # Очищаем таблицу перед новой заливкой чистого датасета
+                    cur.execute("DELETE FROM training_data") 
+                    
                     success_count = 0
                     for _, row in df_new.iterrows():
-                        cur.execute(f"INSERT INTO training_data (S_val, H_val, V_val, AddedDate) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})",
+                        cur.execute("INSERT INTO training_data (S_val, H_val, V_val, AddedDate) VALUES (?, ?, ?, ?)",
                                     (float(row['S']), float(row['H']), float(row['V']), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                         success_count += 1
                     conn.commit()
                     conn.close()
-                    st.success(f"Загружено записей: {success_count}. База данных обновлена.")
+                    st.success(f"Загружено записей: {success_count}. Локальная база данных SQLite успешно обновлена.")
             except Exception as e:
                 st.error(f"Ошибка чтения: {e}")
 
@@ -240,7 +205,8 @@ with tab_admin:
                     df = pd.read_sql("SELECT S_val, H_val, V_val FROM training_data", conn)
                     conn.close()
 
-                    if len(df) < 5 and not IS_ONLINE: 
+                    # Автогенерация базовой сетки, если локальная таблица пуста
+                    if len(df) < 5: 
                         s_mesh, h_mesh = np.meshgrid(np.linspace(19.6, 78.5, 20), np.linspace(0.175, 1.4, 20))
                         df = pd.DataFrame({'S_val': s_mesh.flatten(), 'H_val': h_mesh.flatten(), 'V_val': np.abs(s_mesh.flatten() * h_mesh.flatten() * 0.015)})
 
@@ -251,21 +217,20 @@ with tab_admin:
                     scaler_new = StandardScaler()
                     X_scaled = scaler_new.fit_transform(X)
 
-                    model_new = MLPRegressor(hidden_layer_sizes=(10, 5), activation='tanh', solver='lbfgs', max_iter=2000, random_state=42)
+                    # Консервативная архитектура из 3 нейронов
+                    model_new = MLPRegressor(hidden_layer_sizes=(3,), activation='tanh', solver='lbfgs', max_iter=2000, random_state=42)
                     model_new.fit(X_scaled, y_log)
 
-                    # --- РАСЧЕТ РЕАЛЬНОЙ ТОЧНОСТИ (MAPE) ---
+                    # Вычисление MAPE
                     y_pred_log = model_new.predict(X_scaled)
                     y_pred_real = np.exp(y_pred_log)
-                    
-                    # Формула MAPE: среднее от |(Факт - Прогноз) / Факт| * 100%
                     mape_value = np.mean(np.abs((y_true - y_pred_real) / (y_true + 1e-9))) * 100
 
                     joblib.dump(model_new, 'trained_model.joblib')
                     joblib.dump(scaler_new, 'scaler.joblib')
-                    joblib.dump(mape_value, 'mape.joblib') # Сохраняем точность в файл
+                    joblib.dump(mape_value, 'mape.joblib')
 
-                    st.success(f"🎉 Модель обучена! Объем выборки: {len(df)} записей.")
+                    st.success(f"🎉 Модель обучена в локальном режиме! Объем выборки: {len(df)} записей.")
                     st.info(f"📊 **Достигнутая точность (MAPE): {mape_value:.2f}%**")
                     st.rerun()
                 except Exception as e:
